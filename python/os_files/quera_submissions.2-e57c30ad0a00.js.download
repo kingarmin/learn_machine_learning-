@@ -1,0 +1,309 @@
+/**
+ *  Javascript codes for "All Submissions" and "Final Submissions" pages
+ */
+
+function show_submission_info(action, submission_id, showModal, setCodeContent, finalFunc = () => {}, actionData) {
+  $.ajaxq.abort("submission_info_queue");
+
+  // showModal is a function, that submission info displayed as a modal by calling it.
+  // if showModal == "smooth" (not function) just set the content not open any modal.
+  // it used for showing submission info in same view not in popup.
+  if (showModal !== "smooth") setCodeContent("");
+  else showModal = () => {};
+
+  NProgress.start();
+  $.ajaxq("submission_info_queue", {
+    type: "POST",
+    url: quera_urls["assignment:submission_action"](),
+    data: {
+      action: action,
+      submission_id: submission_id,
+    },
+    success: function (response) {
+      if (response.success) {
+        let result = response.result;
+        if (action === "run_in_colab") {
+          fetch(response.redirect, {
+            cache: "no-cache",
+          })
+            .then((r) => {
+              if (r.status === 301) return r.json();
+              throw Error(r);
+            })
+            .then((data) => {
+              window.open(data.redirect_path, actionData && actionData.targetTab);
+            })
+            .catch(() => {
+              new Noty({ type: "error", text: "این ارسال حاوی نوت‌بوک نیست." }).show();
+            })
+            .finally(() => {
+              finalFunc();
+            });
+        } else if (action === "download_code") {
+          var dl_link = document.createElement("a");
+          dl_link.href = response.download_url;
+          dl_link.dispatchEvent(new MouseEvent("click"));
+        } else if (action === "get_code") {
+          let code_description = "<p><code>" + " submission id: " + submission_id + "</code></p>";
+          const tabClasses = "item";
+          const tabContentClasses = "ui bottom attached tab segment";
+          let activeIndex = 0;
+          const tabContent = response?.result?.map((tabContent, index) => {
+            const element = document.createElement("div");
+            element.classList = index === 0 ? tabContentClasses + " " + "active" : tabContentClasses;
+            if (tabContent.lang === "pdf" && tabContent.file_content) {
+              element.style.height = "600px";
+              const pdf_element = `<object data="${tabContent.file_content}?mode=view" width="100%" height="100%" type="application/pdf">`;
+              element.innerHTML = pdf_element;
+            } else if (tabContent.file_content) {
+              const code_element = `<pre style="overflow-y:auto;max-height:360px" id="submission-code" class="line-numbers"><code class="language-${
+                tabContent.lang
+              }">${html_escape(tabContent.file_content)}</code></pre>`;
+              element.innerHTML = code_element;
+            } else {
+              element.innerHTML = "<p style='text-align:center' dir='rtl'>محتوای موردنظر خالی است!</p>";
+            }
+            return element;
+          });
+          const tabbars = response?.result?.map((tab, index) => {
+            const element = document.createElement("div");
+            element.classList = index === 0 ? tabClasses + " " + "active" : tabClasses;
+            element.innerHTML = tab.file_path;
+            element.addEventListener("click", () => {
+              tabbars[activeIndex].classList.remove("active");
+              tabContent[activeIndex].classList.remove("active");
+              element.classList.add("active");
+              tabContent[index].classList.add("active");
+              activeIndex = index;
+            });
+            return element;
+          });
+          result = `<div id="get_code_root" style="overflow-x:auto;overflow-y:hidden" class="ui top attached tabular menu"></div>`;
+          setCodeContent(code_description + result);
+          showModal();
+          const modal = document.getElementById("get_code_root").parentNode;
+          tabbars.forEach((item) => document.getElementById("get_code_root").appendChild(item));
+          tabContent.forEach((item) => modal.appendChild(item));
+          NProgress.done();
+          Prism.highlightAll();
+        } else {
+          if (action === "get_code" || action === "get_judge_log") result = html_escape(result);
+          let code_description = "<p><code>" + response.filename + " | submission id: " + submission_id + "</code></p>";
+          let code_element = `<pre id="submission-code" class="line-numbers"><code style="unicode-bidi: plaintext" class="language-${response.lang}"`;
+          code_element += ` file_name="${response.filename}" file_type="${response.file_type_id}"  >`;
+          code_element += result + "</code></pre>";
+          setCodeContent(code_description + code_element);
+          showModal();
+          NProgress.done();
+          if (action === "get_code") Prism.highlightAll();
+        }
+      } else {
+        if (action === "get_code" && response.reason === "decode-error")
+          var noty = new Noty({
+            type: "alert",
+            timeout: false,
+            layout: "center",
+            text: "محتوای فایل قابل نمایش نیست.",
+            buttons: [
+              Noty.button("دانلود فایل", "ui positive button", function () {
+                noty.close();
+                window.location.href = quera_urls["assignment:download_submission_file"](submission_id);
+              }),
+              Noty.button("بازگشت", "ui negative button", function () {
+                noty.close();
+              }),
+            ],
+          }).show();
+        else new Noty({ text: response.message, type: "error" }).show();
+      }
+    },
+    complete: function () {
+      NProgress.done();
+    },
+  });
+}
+
+function quera_submissions() {
+  $(document).ready(function () {
+    const params = new Proxy(new URLSearchParams(window.location.search), {
+      get: (searchParams, prop) => searchParams.get(prop.toString()),
+    });
+
+    $(".show-submission-info").on("click", function () {
+      let button = $(this);
+      const icon = button[0].querySelector("i.icon");
+      const withLoading = icon && button[0].className.includes("with-loading");
+      let iconClassName;
+      if (withLoading) {
+        iconClassName = icon.className;
+        $(icon).attr("class", "loading spinner icon");
+      }
+
+      let row = button.parents("tr");
+      let action = button.data("action");
+      let submission_id = row.data("submission_id");
+      show_submission_info(
+        action,
+        submission_id,
+        () => {
+          $(".ui.modal.view_code").modal("show");
+          $(".ui.modal.view_code").on(
+            {
+              touchmove: (e) => e.stopPropagation(),
+            },
+            true,
+          );
+        },
+        (html) => $(".ui.modal.view_code .modal_content").html(html),
+        () => {
+          if (withLoading) {
+            $(icon).attr("class", iconClassName);
+          }
+        },
+      );
+    });
+    $(".rejudge").click(function () {
+      var row = $(this).parents("tr");
+      NProgress.start();
+      $.ajax({
+        type: "POST",
+        url: quera_urls["assignment:submission_action"](),
+        data: {
+          action: "rejudge",
+          submission_id: row.data("submission_id"),
+        },
+        success: function (response) {
+          if (response.success) {
+            new Noty({ text: "در حال نمره دهی مجدد", type: "success" }).show();
+            location.reload();
+          } else new Noty({ text: response.message, type: "error" }).show();
+        },
+        complete: function () {
+          NProgress.done();
+        },
+      });
+    });
+    $(".remove_submission").click(function () {
+      var row = $(this).parents("tr");
+      var noty = new Noty({
+        type: "alert",
+        timeout: false,
+        layout: "center",
+        text: "آیا از حذف این ارسال اطمینان دارید؟",
+        buttons: [
+          Noty.button("بله", "ui positive button", function () {
+            NProgress.start();
+            $.ajax({
+              type: "POST",
+              url: quera_urls["assignment:submission_action"](),
+              data: {
+                action: "remove",
+                submission_id: row.data("submission_id"),
+              },
+              success: function (response) {
+                if (response.success) {
+                  row.remove();
+                  new Noty({ text: "حذف با موفقیت انجام شد.", type: "success" }).show();
+                } else new Noty({ text: response.message, type: "error" }).show();
+              },
+              complete: function () {
+                NProgress.done();
+              },
+            });
+            noty.close();
+          }),
+          Noty.button("خیر", "ui negative button", function () {
+            noty.close();
+          }),
+        ],
+      }).show();
+    });
+    $(".set_final").change(function () {
+      var button = $(this);
+      if (!button.is(":checked")) {
+        button.prop("checked", true);
+        return;
+      }
+      button.prop("checked", false);
+      var row = $(this).parents("tr");
+      NProgress.start();
+      $.ajax({
+        type: "POST",
+        url: quera_urls["assignment:submission_action"](),
+        data: {
+          action: "set_final",
+          submission_id: row.data("submission_id"),
+        },
+        success: function (response) {
+          if (response.success) {
+            $(
+              "tr[data-user_id='" +
+                row.data("user_id") +
+                "'][data-problem_id='" +
+                row.data("problem_id") +
+                "'] input.set_final",
+            ).prop("checked", false);
+            $(
+              "tr[data-user_id='" +
+                row.data("user_id") +
+                "'][data-problem_id='" +
+                row.data("problem_id") +
+                "'][data-submission_id='" +
+                row.data("submission_id") +
+                "'] input.set_final",
+            ).prop("checked", true);
+            new Noty({ text: "تغییر ارسال نهایی با موفقیت انجام شد.", type: "success" }).show();
+          } else new Noty({ text: response.message, type: "error" }).show();
+        },
+        complete: function () {
+          NProgress.done();
+        },
+      });
+    });
+    $(".set_instructor_score").click(function () {
+      var row = $(this).parents("tr");
+      var instructor_score = row.find(".submit_score").val();
+      NProgress.start();
+      $.ajax({
+        type: "POST",
+        url: quera_urls["assignment:submission_action"](),
+        data: {
+          action: "set_instructor_score",
+          submission_id: row.data("submission_id"),
+          instructor_score: instructor_score,
+        },
+        success: function (response) {
+          if (response.success) new Noty({ text: "نمره با موفقیت ذخیره شد.", type: "success" }).show();
+          else new Noty({ text: response.message, type: "error" }).show();
+        },
+        complete: function () {
+          NProgress.done();
+        },
+      });
+    });
+
+    if (params.run === "google-colab" && params.submission) {
+      $("html, body").css({
+        overflow: "hidden",
+        height: "100%",
+      });
+      const loader = document.createElement("div");
+      loader.innerHTML = `<div style="position: absolute; width: 100vw; height: 100vh; left: 0; top: 0">
+        <div class="ui active dimmer">
+          <div class="ui indeterminate text loader">در حال انتقال به کولب</div>
+        </div>
+      </div>`;
+      document.body.appendChild(loader.firstChild);
+      show_submission_info(
+        "run_in_colab",
+        params.submission,
+        () => {},
+        () => {},
+        () => {},
+        { targetTab: "_self" },
+      );
+    }
+  });
+}
+
+quera_submissions();
